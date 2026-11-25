@@ -128,18 +128,23 @@ def _free_path(console: Console, prompt: str, default: Path) -> Path:
 def plan_backup(console: Console, backup_dir: Path) -> BackupPlan:
     console.say(
         "The private key will live in the YubiKey, which never gives it out again. "
-        "A backup is only possible if the key exists outside the YubiKey for a moment, "
-        "now, in this program's memory."
+        "The most secure choice is to let the YubiKey make the key itself: it then never "
+        "exists anywhere else, and so cannot be backed up. A backup is only possible if "
+        "the key is made on this Mac and exists in this program's memory for a moment "
+        "before it is moved into the YubiKey."
     )
     choice = console.choose(
-        "Backup",
+        "Where to make the key",
         [
-            "No backup\nThe key is created inside the YubiKey and exists nowhere else. "
-            "If the YubiKey is lost or breaks, you register a new key.",
-            "Backup, encrypted with a passphrase\nA file (and optionally a printable page) "
-            "that is useless without the passphrase. Forget the passphrase and the backup is gone.",
-            "Backup in plain text\nA file (and optionally a printable page) that works as the "
-            "security key for anyone who has it. Only for a safe or a locked drawer.",
+            "In the YubiKey (most secure, no backup possible)\nThe key is generated inside "
+            "the YubiKey and never exists anywhere else. If the YubiKey is lost or breaks, "
+            "you register a new key.",
+            "On this Mac, with a backup encrypted with a passphrase\nA file (and optionally "
+            "a printable page) that is useless without the passphrase. Forget the passphrase "
+            "and the backup is gone.",
+            "On this Mac, with a backup in plain text\nA file (and optionally a printable "
+            "page) that works as the security key for anyone who has it. Only for a safe or "
+            "a locked drawer.",
         ],
     )
     if choice == 0:
@@ -337,7 +342,7 @@ def run(
     console.step(1, STEPS, "YubiKey")
     yubikey = choose_yubikey(console, serial)
 
-    console.step(2, STEPS, "Backup")
+    console.step(2, STEPS, "Where the key is made")
     plan = plan_backup(console, backup_dir or Path.home() / "Desktop")
 
     console.step(3, STEPS, "Create the key")
@@ -380,7 +385,8 @@ def summary(console: Console, result: Result) -> None:
         f"{result.slot} of YubiKey {result.yubikey_serial}."
     )
     if result.backup.kind == "none":
-        console.say("There is no backup: the key exists only inside that YubiKey.")
+        console.say("The key was generated inside that YubiKey and has never existed anywhere else. "
+            "There is no backup.")
     else:
         kind = "encrypted with your passphrase" if result.backup.kind == "passphrase" else "in PLAIN TEXT"
         console.say(f"Backup ({kind}): {result.backup.path}")

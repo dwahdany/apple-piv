@@ -253,7 +253,7 @@ def test_no_backup_key_is_made_in_the_yubikey_and_pico_gets_flashed(world, tmp_p
     assert "factory default" in console.text  # told to change the default management key
     _sign_in(key_file, yubikeys)
     wizard.summary(console, result)
-    assert "no backup" in console.text
+    assert "There is no backup" in console.text and "generated inside" in console.text
 
 
 def test_passphrase_backup_pin_protected_yubikey_and_a_refusal_by_apple(world, tmp_path):

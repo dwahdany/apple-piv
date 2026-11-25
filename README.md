@@ -35,13 +35,15 @@ that matters.
 1. **YubiKey.** Plug it in. A free PIV slot (82–95) is chosen; occupied slots
    are never written to. If the YubiKey's management key is PIN-protected, you
    are asked for the PIV PIN.
-2. **Backup.** Decided before the key exists, because it decides where the key
-   is made:
-   - *No backup*: the key is created inside the YubiKey and exists nowhere
-     else. If the YubiKey breaks, you register a new key.
-   - *Encrypted with a passphrase*: a file in the [age](https://age-encryption.org)
-     format (`age --decrypt` opens it without this program).
-   - *Plain text*: a file that works as the security key for whoever has it.
+2. **Where the key is made.** This also decides whether a backup is possible:
+   - *In the YubiKey* (most secure): the YubiKey generates the key itself, so
+     the key never exists anywhere else, not even in this Mac's memory. No
+     backup is possible. If the YubiKey breaks, you register a new key.
+   - *On this Mac, with a passphrase-encrypted backup*: the key is made in
+     memory, written to a file in the [age](https://age-encryption.org) format
+     (`age --decrypt` opens it without this program) and moved into the YubiKey.
+   - *On this Mac, with a plain-text backup*: the same, but the file works as
+     the security key for whoever has it.
 
    Either kind of backup can also be written as a page to print, with a QR
    code and the same content as text.
