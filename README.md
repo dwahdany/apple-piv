@@ -110,7 +110,11 @@ Two things to know:
   required an attestation certificate but did not check who issued it.
 - **Change the YubiKey's PIV PIN, PUK and management key** from the factory
   defaults (Yubico Authenticator, or `ykman piv access`). The defaults do not
-  let anyone read the key, but anyone with USB access could delete it.
+  let anyone read the key, but they let anyone with USB access overwrite it.
+- **Whoever has USB access can still destroy the key**, whatever the PIN is:
+  three wrong PINs and three wrong PUKs block both, after which the PIV
+  application can be reset, which erases every slot. Nothing is stolen that
+  way, but sign-ins stop until you restore from a backup or register a new key.
   Firmware before 5.7 is also open to a laboratory side-channel attack on its
   ECDSA keys (EUCLEAK), which needs the YubiKey in hand and special equipment.
 
