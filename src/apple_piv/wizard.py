@@ -170,26 +170,44 @@ def plan_backup(console: Console, backup_dir: Path) -> BackupPlan:
 # ---- step 3: the key -------------------------------------------------------------------------
 
 
+def choose_slot(console: Console, setup: piv.PivSetup, slot_hex: str | None) -> Any:
+    """Pick a free PIV slot, refusing occupied slots and confirming on firmware < 5.3."""
+    from yubikit.piv import SLOT
+
+    if slot_hex:
+        slot = SLOT(int(slot_hex, 16))
+        if not setup.is_free(slot):
+            raise SetupAborted(
+                f"PIV slot {slot_hex} on this YubiKey already holds a key or certificate. "
+                "It was left untouched."
+            )
+    else:
+        free = setup.free_slots()
+        if not free:
+            raise SetupAborted("This YubiKey has no free retired PIV slot (82-95).")
+        slot = free[0]
+    if not setup.supports_metadata():
+        console.warn(
+            f"This YubiKey's firmware ({setup.yubikey.version}) cannot detect imported PIV keys "
+            "that have no certificate stored with them."
+        )
+        if not console.confirm(
+            f"Are you sure PIV slot {slot.value:02x} holds no such key and can be used?",
+            default=False,
+        ):
+            raise SetupAborted(f"PIV slot {slot.value:02x} was left untouched.")
+    console.ok(f"PIV slot {slot.value:02x} is free and will be used")
+    return slot
+
+
 def create_key(
     console: Console, yubikey: piv.YubiKey, plan: BackupPlan, slot_hex: str | None
 ) -> tuple[dict[str, Any], Any]:
     """(the key file's ``piv`` entry, the private key if a backup was asked for else None)."""
     from cryptography.hazmat.primitives.asymmetric import ec
-    from yubikit.piv import SLOT
 
     with piv.PivSetup(yubikey) as setup:
-        if slot_hex:
-            slot = SLOT(int(slot_hex, 16))
-            if not setup.is_free(slot):
-                raise SetupAborted(
-                    f"PIV slot {slot_hex} on this YubiKey already holds a key. It was left untouched."
-                )
-        else:
-            free = setup.free_slots()
-            if not free:
-                raise SetupAborted("This YubiKey has no free retired PIV slot (82-95).")
-            slot = free[0]
-        console.ok(f"PIV slot {slot.value:02x} is free and will be used")
+        slot = choose_slot(console, setup, slot_hex)
         unlock(console, setup)
         if plan.kind == "none":
             private_key = None

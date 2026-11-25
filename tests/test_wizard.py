@@ -61,7 +61,7 @@ class FakeConsole:
 class FakeYubiKeys:
     """One YubiKey: its slots hold private keys that never leave this object."""
 
-    def __init__(self, kind="default", occupied=()):
+    def __init__(self, kind="default", occupied=(), version="5.7.4"):
         from yubikit.piv import SLOT
 
         self.kind = kind
@@ -69,12 +69,13 @@ class FakeYubiKeys:
         self.plugged_in = True
         self.unlocked = False
         self.pin_attempts = 3
-        self.key = piv.YubiKey(device=None, serial=1234567, version="5.7.4", name="YubiKey 5 NFC")
+        self.key = piv.YubiKey(device=None, serial=1234567, version=version, name="YubiKey 5 NFC")
         outer = self
 
         class Setup:
             def __init__(self, yubikey):
                 assert yubikey is outer.key
+                self.yubikey = yubikey
 
             def __enter__(self):
                 outer.unlocked = False
@@ -82,6 +83,9 @@ class FakeYubiKeys:
 
             def __exit__(self, *_exc):
                 pass
+
+            def supports_metadata(self):
+                return tuple(int(part) for part in outer.key.version.split(".")) >= (5, 3, 0)
 
             def free_slots(self):
                 return [s for s in SLOT if s.name.startswith("RETIRED") and s not in outer.slots]
@@ -394,3 +398,52 @@ def test_losing_the_pico_says_which_slot_holds_an_unregistered_key(world, tmp_pa
     assert "PIV slot 82 of YubiKey 1234567" in str(error.value)
     assert "not registered" in str(error.value)
     assert not (tmp_path / "softkey.json").exists()
+
+
+def test_firmware_below_5_3_asks_before_writing_and_aborts_if_declined(world, tmp_path):
+    yubikeys, _pico = world(FakeYubiKeys(version="4.3.7"))
+    console = FakeConsole([("choose", 0), ("confirm", False)])
+    with pytest.raises(wizard.SetupAborted, match="left untouched"):
+        wizard.run(console, tmp_path / "softkey.json", backup_dir=tmp_path)
+    assert "4.3.7" in console.text and "cannot detect imported PIV keys" in console.text
+    assert yubikeys.slots == {}
+    assert not (tmp_path / "softkey.json").exists()
+
+
+def test_firmware_below_5_3_proceeds_when_confirmed(world, tmp_path):
+    yubikeys, _pico = world(FakeYubiKeys(version="4.3.7"))
+    console = FakeConsole([("choose", 0), ("confirm", True), ("confirm", True)])
+    wizard.run(console, tmp_path / "softkey.json", backup_dir=tmp_path)
+    assert "4.3.7" in console.text
+    assert (tmp_path / "softkey.json").is_file()
+
+
+def test_restore_to_yubikey_refuses_occupied_slot_and_confirms_below_5_3(world, tmp_path):
+    from apple_piv import cli
+
+    key = ec.generate_private_key(ec.SECP256R1())
+    backup_file = tmp_path / "backup.txt"
+    backup_file.write_text(
+        backup.encode(key, "ab" * 16, [{"id": "QUJD", "rp_id": "apple.com", "user_id": ""}])
+    )
+
+    yubikeys, _pico = world(FakeYubiKeys(occupied=["85"], version="4.3.7"))
+    args = type(
+        "Args",
+        (),
+        {
+            "backup": str(backup_file),
+            "out": str(tmp_path / "out.json"),
+            "to_yubikey": True,
+            "serial": None,
+            "slot": "85",
+        },
+    )()
+    assert cli._restore(args, FakeConsole([])) == 1
+    assert list(yubikeys.slots.values()) == ["someone else's key"]
+
+    args.slot = None
+    assert cli._restore(args, FakeConsole([("confirm", False)])) == 1
+    assert not (tmp_path / "out.json").exists()
+
+

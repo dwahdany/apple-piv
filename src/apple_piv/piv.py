@@ -280,22 +280,56 @@ class PivSetup:
     def __exit__(self, *_exc: object) -> None:
         self._connection.close()
 
-    def _occupied(self, slot: Any) -> bool:
+    def supports_metadata(self) -> bool:
+        """Whether this YubiKey's firmware (>= 5.3) can report bare keys without certificates."""
+        return self._session.version >= (5, 3, 0)
+
+    def _has_key(self, slot: Any) -> bool:
         from yubikit.core import NotSupportedError
-        from yubikit.core.smartcard import ApduError
+        from yubikit.core.smartcard import SW, ApduError
 
         try:
             self._session.get_slot_metadata(slot)
             return True
-        except ApduError:
-            return False
-        except NotSupportedError:
-            # Firmware before 5.3 cannot say what a slot holds: go by its certificate.
-            try:
-                self._session.get_certificate(slot)
-                return True
-            except ApduError:
+        except ApduError as error:
+            if error.sw == SW.REFERENCE_DATA_NOT_FOUND:
                 return False
+            raise PivError(f"cannot inspect PIV slot {slot.value:02x}: {error}") from error
+        except NotSupportedError:
+            # Firmware before 5.3 has no slot metadata. Attestation (4.3+) still detects
+            # keys generated on the YubiKey even when no certificate is stored.
+            try:
+                self._session.attest_key(slot)
+                return True
+            except NotSupportedError:
+                return False
+            except ApduError as error:
+                if error.sw in (
+                    SW.INCORRECT_PARAMETERS,
+                    SW.CONDITIONS_NOT_SATISFIED,
+                    SW.FILE_NOT_FOUND,
+                    SW.REFERENCE_DATA_NOT_FOUND,
+                ):
+                    return False
+                raise PivError(f"cannot inspect PIV slot {slot.value:02x}: {error}") from error
+
+    def _has_certificate(self, slot: Any) -> bool:
+        from yubikit.core import BadResponseError
+        from yubikit.core.smartcard import SW, ApduError
+        from yubikit.piv import OBJECT_ID
+
+        try:
+            return bool(self._session.get_object(OBJECT_ID.from_slot(slot)))
+        except BadResponseError:
+            # Malformed data is still data in the slot; never overwrite it.
+            return True
+        except ApduError as error:
+            if error.sw == SW.FILE_NOT_FOUND:
+                return False
+            raise PivError(f"cannot inspect PIV slot {slot.value:02x}: {error}") from error
+
+    def _occupied(self, slot: Any) -> bool:
+        return self._has_key(slot) or self._has_certificate(slot)
 
     def free_slots(self) -> list[Any]:
         """Retired slots (82-95) that hold nothing. Other slots are never offered."""
@@ -339,20 +373,54 @@ class PivSetup:
             management_key = DEFAULT_MANAGEMENT_KEY
         self._session.authenticate(self._key_type, management_key)
 
+    def _write_certificate(self, slot: Any, public_key: Any) -> None:
+        """Store a self-signed certificate so the slot is visibly occupied on all firmware."""
+        import datetime
+
+        from cryptography import x509
+        from cryptography.x509.oid import NameOID
+        from ykman.piv import sign_certificate_builder
+        from yubikit.piv import KEY_TYPE
+
+        now = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=1)
+        until = now + datetime.timedelta(days=365 * 30)
+        subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "apple-piv")])
+        builder = (
+            x509.CertificateBuilder()
+            .public_key(public_key)
+            .subject_name(subject)
+            .issuer_name(subject)
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(now)
+            .not_valid_after(until)
+        )
+        certificate = sign_certificate_builder(
+            self._session, slot, KEY_TYPE.ECCP256, builder, hashes.SHA256
+        )
+        self._session.put_certificate(slot, certificate)
+
     def generate(self, slot: Any) -> Any:
         """Create the key inside the YubiKey. It never exists anywhere else."""
         from yubikit.piv import KEY_TYPE, PIN_POLICY, TOUCH_POLICY
 
-        return self._session.generate_key(
+        if self._occupied(slot):
+            raise PivError(f"PIV slot {slot.value:02x} already holds a key or certificate")
+        public_key = self._session.generate_key(
             slot, KEY_TYPE.ECCP256, PIN_POLICY.NEVER, TOUCH_POLICY.NEVER
         )
+        self._write_certificate(slot, public_key)
+        return public_key
 
     def import_key(self, slot: Any, private_key: Any) -> Any:
         """Put an existing P-256 key into the YubiKey (so that a backup of it can exist)."""
         from yubikit.piv import PIN_POLICY, TOUCH_POLICY
 
+        if self._occupied(slot):
+            raise PivError(f"PIV slot {slot.value:02x} already holds a key or certificate")
         self._session.put_key(slot, private_key, PIN_POLICY.NEVER, TOUCH_POLICY.NEVER)
-        return private_key.public_key()
+        public_key = private_key.public_key()
+        self._write_certificate(slot, public_key)
+        return public_key
 
     def test_signature(self, slot: Any, public_key: Any) -> None:
         """Sign once without touch or PIN, exactly as an unattended sign-in will."""

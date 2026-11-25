@@ -74,24 +74,14 @@ def _restore(args: argparse.Namespace, console: Console) -> int:
         return 1
     out.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     if args.to_yubikey:
-        from yubikit.piv import SLOT
-
         try:
             yubikey = wizard.choose_yubikey(console, args.serial)
             with piv.PivSetup(yubikey) as setup:
-                if args.slot:
-                    slot = SLOT(int(args.slot, 16))
-                    if not setup.is_free(slot):
-                        raise wizard.SetupAborted(f"slot {args.slot} already holds a key; left untouched")
-                else:
-                    free = setup.free_slots()
-                    if not free:
-                        raise wizard.SetupAborted("no free retired PIV slot (82-95) on this YubiKey")
-                    slot = free[0]
+                slot = wizard.choose_slot(console, setup, args.slot)
                 wizard.unlock(console, setup)
                 public_key = setup.import_key(slot, private_key)
                 setup.test_signature(slot, public_key)
-        except wizard.SetupAborted as error:
+        except (wizard.SetupAborted, piv.PivError) as error:
             console.say(f"error: {error}")
             return 1
         state = {
